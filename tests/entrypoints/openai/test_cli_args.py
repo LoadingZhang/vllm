@@ -42,6 +42,7 @@ def serve_parser():
 def test_config_arg_parsing(serve_parser, cli_config_file):
     args = serve_parser.parse_args([])
     assert args.port == 8000
+    assert args.limit_concurrency is None
     args = serve_parser.parse_args(["--config", cli_config_file])
     assert args.port == 12312
     args = serve_parser.parse_args(
@@ -62,6 +63,16 @@ def test_config_arg_parsing(serve_parser, cli_config_file):
         ]
     )
     assert args.port == 9000
+
+
+def test_limit_concurrency_arg_parsing(serve_parser):
+    args = serve_parser.parse_args(["--limit-concurrency", "128"])
+    assert args.limit_concurrency == 128
+    validate_parsed_serve_args(args)
+
+    args = serve_parser.parse_args(["--limit-concurrency", "0"])
+    with pytest.raises(ValueError, match="--limit-concurrency"):
+        validate_parsed_serve_args(args)
 
 
 ### Tests for LoRA module parsing

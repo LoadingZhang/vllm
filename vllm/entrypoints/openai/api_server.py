@@ -587,6 +587,7 @@ async def build_and_serve(
         host=args.host,
         port=args.port,
         log_level=args.uvicorn_log_level,
+        limit_concurrency=args.limit_concurrency,
         # NOTE: When the 'disable_uvicorn_access_log' value is True,
         # no access log will be output.
         access_log=not args.disable_uvicorn_access_log,
@@ -632,6 +633,7 @@ async def build_and_serve_renderer(
         host=args.host,
         port=args.port,
         log_level=args.uvicorn_log_level,
+        limit_concurrency=args.limit_concurrency,
         # NOTE: When the 'disable_uvicorn_access_log' value is True,
         # no access log will be output.
         access_log=not args.disable_uvicorn_access_log,

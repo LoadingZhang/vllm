@@ -246,6 +246,9 @@ class FrontendArgs(BaseFrontendArgs):
         "critical", "error", "warning", "info", "debug", "trace"
     ] = "info"
     """Log level for uvicorn."""
+    limit_concurrency: int | None = None
+    """Maximum number of concurrent HTTP connections or tasks. When set,
+    uvicorn returns HTTP 503 responses once the limit is exceeded."""
     disable_uvicorn_access_log: bool = False
     """Disable uvicorn access log."""
     disable_access_log_for_endpoints: str | None = None
@@ -397,6 +400,8 @@ def validate_parsed_serve_args(args: argparse.Namespace):
         raise TypeError("Error: --enable-auto-tool-choice requires --tool-call-parser")
     if args.enable_log_outputs and not args.enable_log_requests:
         raise TypeError("Error: --enable-log-outputs requires --enable-log-requests")
+    if args.limit_concurrency is not None and args.limit_concurrency < 1:
+        raise ValueError("Error: --limit-concurrency must be a positive integer")
 
     if args.data_parallel_multi_port_external_lb:
         from vllm.entrypoints.openai.dp_supervisor import (
