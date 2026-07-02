@@ -43,6 +43,7 @@ from vllm.entrypoints.serve.utils.api_utils import (
 )
 from vllm.entrypoints.serve.utils.request_logger import RequestLogger
 from vllm.entrypoints.serve.utils.server_utils import (
+    ConcurrencyLimitMiddleware,
     engine_error_handler,
     exception_handler,
     generation_error_handler,
@@ -267,6 +268,19 @@ def build_app(
 
     # Add scaling middleware to check for scaling state
     app.add_middleware(ScalingMiddleware)
+
+    # Add concurrency limit middleware to fail fast with HTTP 503 under
+    # overload, while exempting health/monitoring endpoints so that k8s probes
+    # and metrics scraping keep working.
+    if args.limit_concurrency is not None:
+        concurrency_kwargs: dict = {"max_concurrency": args.limit_concurrency}
+        if args.limit_concurrency_excluded_endpoints is not None:
+            concurrency_kwargs["excluded_paths"] = tuple(
+                p.strip()
+                for p in args.limit_concurrency_excluded_endpoints.split(",")
+                if p.strip()
+            )
+        app.add_middleware(ConcurrencyLimitMiddleware, **concurrency_kwargs)
 
     if "realtime" in supported_tasks:
         # Add WebSocket metrics middleware
@@ -587,7 +601,6 @@ async def build_and_serve(
         host=args.host,
         port=args.port,
         log_level=args.uvicorn_log_level,
-        limit_concurrency=args.limit_concurrency,
         # NOTE: When the 'disable_uvicorn_access_log' value is True,
         # no access log will be output.
         access_log=not args.disable_uvicorn_access_log,
@@ -633,7 +646,6 @@ async def build_and_serve_renderer(
         host=args.host,
         port=args.port,
         log_level=args.uvicorn_log_level,
-        limit_concurrency=args.limit_concurrency,
         # NOTE: When the 'disable_uvicorn_access_log' value is True,
         # no access log will be output.
         access_log=not args.disable_uvicorn_access_log,

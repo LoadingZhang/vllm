@@ -40,6 +40,20 @@ logger = init_logger("vllm.entrypoints.openai.server_utils")
 
 GUARDED_PREFIX = ("/v1", "/v2", "/inference")
 
+# Endpoints that must never be throttled by the concurrency limit, so that
+# health checks (k8s liveness/readiness probes) and metrics scraping keep
+# working even when the server is overloaded. Mirrors the health/monitoring
+# handlers excluded from Prometheus instrumentation (see
+# vllm/entrypoints/serve/instrumentator/metrics.py).
+CONCURRENCY_LIMIT_EXCLUDED_ENDPOINTS = (
+    "/health",
+    "/load",
+    "/ping",
+    "/version",
+    "/server_info",
+    "/metrics",
+)
+
 
 class AuthenticationMiddleware:
     """
@@ -121,6 +135,58 @@ class XRequestIdMiddleware:
             await send(message)
 
         return self.app(scope, receive, send_with_request_id)
+
+
+class ConcurrencyLimitMiddleware:
+    """
+    Pure ASGI middleware that limits the number of concurrent in-flight HTTP
+    requests. When the number of active requests exceeds ``max_concurrency``,
+    additional requests fail fast with an HTTP 429 response instead of being
+    queued.
+
+    Unlike uvicorn's ``limit_concurrency`` (which counts every connection at
+    the server level and cannot exclude any path), this middleware runs inside
+    the ASGI app and exempts health/monitoring endpoints from both the count
+    and the 429 response. This keeps k8s liveness/readiness probes and metrics
+    scraping working even when the server is overloaded, avoiding spurious pod
+    restarts/migrations.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_concurrency: int,
+        excluded_paths: tuple[str, ...] = CONCURRENCY_LIMIT_EXCLUDED_ENDPOINTS,
+    ) -> None:
+        self.app = app
+        self.max_concurrency = max_concurrency
+        self.excluded_paths = tuple(excluded_paths)
+        self._active = 0
+
+    def _is_excluded(self, scope: Scope) -> bool:
+        root_path = scope.get("root_path", "")
+        url_path = scope["path"].removeprefix(root_path)
+        return url_path.startswith(self.excluded_paths)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Only throttle HTTP requests; pass through lifespan/websocket/etc.
+        if scope["type"] != "http" or self._is_excluded(scope):
+            await self.app(scope, receive, send)
+            return
+
+        if self._active > self.max_concurrency:
+            response = JSONResponse(
+                content={"error": "The server is overloaded. Please try again later."},
+                status_code=HTTPStatus.TOO_MANY_REQUESTS,
+            )
+            await response(scope, receive, send)
+            return
+
+        self._active += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self._active -= 1
 
 
 def load_log_config(log_config_file: str | None) -> dict | None:
@@ -354,9 +420,11 @@ async def engine_error_handler(
     if req.app.state.args.log_error_stack:
         logger.exception(
             "Engine Exception caught. Request id: %s",
-            req.state.request_metadata.request_id
-            if hasattr(req.state, "request_metadata")
-            else None,
+            (
+                req.state.request_metadata.request_id
+                if hasattr(req.state, "request_metadata")
+                else None
+            ),
         )
 
     terminate_if_errored(
@@ -382,9 +450,11 @@ async def exception_handler(req: Request, exc: Exception):
     if req.app.state.args.log_error_stack:
         logger.error(
             "Exception caught. Request id: %s",
-            req.state.request_metadata.request_id
-            if hasattr(req.state, "request_metadata")
-            else None,
+            (
+                req.state.request_metadata.request_id
+                if hasattr(req.state, "request_metadata")
+                else None
+            ),
         )
 
     err = create_error_response(exc)
@@ -395,9 +465,11 @@ async def http_exception_handler(req: Request, exc: HTTPException):
     if req.app.state.args.log_error_stack:
         logger.exception(
             "HTTPException caught. Request id: %s",
-            req.state.request_metadata.request_id
-            if hasattr(req.state, "request_metadata")
-            else None,
+            (
+                req.state.request_metadata.request_id
+                if hasattr(req.state, "request_metadata")
+                else None
+            ),
         )
     err = ErrorResponse(
         error=ErrorInfo(
@@ -413,9 +485,11 @@ async def validation_exception_handler(req: Request, exc: RequestValidationError
     if req.app.state.args.log_error_stack:
         logger.exception(
             "RequestValidationError caught. Request id: %s",
-            req.state.request_metadata.request_id
-            if hasattr(req.state, "request_metadata")
-            else None,
+            (
+                req.state.request_metadata.request_id
+                if hasattr(req.state, "request_metadata")
+                else None
+            ),
         )
 
     param = None

@@ -75,6 +75,17 @@ def test_limit_concurrency_arg_parsing(serve_parser):
         validate_parsed_serve_args(args)
 
 
+def test_limit_concurrency_excluded_endpoints_arg_parsing(serve_parser):
+    args = serve_parser.parse_args([])
+    assert args.limit_concurrency_excluded_endpoints is None
+
+    args = serve_parser.parse_args(
+        ["--limit-concurrency-excluded-endpoints", "/health,/ping"]
+    )
+    assert args.limit_concurrency_excluded_endpoints == "/health,/ping"
+    validate_parsed_serve_args(args)
+
+
 ### Tests for LoRA module parsing
 def test_valid_key_value_format(serve_parser):
     # Test old format: name=path

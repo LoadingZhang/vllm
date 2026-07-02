@@ -247,8 +247,17 @@ class FrontendArgs(BaseFrontendArgs):
     ] = "info"
     """Log level for uvicorn."""
     limit_concurrency: int | None = None
-    """Maximum number of concurrent HTTP connections or tasks. When set,
-    uvicorn returns HTTP 503 responses once the limit is exceeded."""
+    """Maximum number of concurrent in-flight HTTP requests. When set, the
+    server fails fast with HTTP 429 responses once the limit is exceeded,
+    instead of queueing requests. Health/monitoring endpoints (e.g. /health,
+    /ping, /load, /metrics) are exempt so that k8s probes and metrics scraping
+    keep working under overload. Use --limit-concurrency-excluded-endpoints to
+    customize the exempt paths."""
+    limit_concurrency_excluded_endpoints: str | None = None
+    """Comma-separated list of endpoint paths exempt from --limit-concurrency.
+    When unset, a built-in default of health/monitoring endpoints is used
+    (/health, /load, /ping, /version, /server_info, /metrics). Setting this
+    replaces the default list entirely. Example: "/health,/ping"."""
     disable_uvicorn_access_log: bool = False
     """Disable uvicorn access log."""
     disable_access_log_for_endpoints: str | None = None
@@ -336,6 +345,11 @@ class FrontendArgs(BaseFrontendArgs):
         # comma-separated string, not a list
         if "nargs" in frontend_kwargs["disable_access_log_for_endpoints"]:
             del frontend_kwargs["disable_access_log_for_endpoints"]["nargs"]
+
+        # Special case: limit_concurrency_excluded_endpoints is a single
+        # comma-separated string, not a list
+        if "nargs" in frontend_kwargs["limit_concurrency_excluded_endpoints"]:
+            del frontend_kwargs["limit_concurrency_excluded_endpoints"]["nargs"]
 
         return frontend_kwargs
 
