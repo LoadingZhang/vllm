@@ -245,6 +245,16 @@ class FrontendArgs(BaseFrontendArgs):
         "critical", "error", "warning", "info", "debug", "trace"
     ] = "info"
     """Log level for uvicorn."""
+    max_waiting_seqs: int | None = None
+    """Maximum number of HTTP requests allowed to wait beyond --max-num-seqs.
+    Requests exceeding the combined limit return HTTP 429. A value of 0
+    disables additional waiting. Health and monitoring endpoints are exempt.
+    Use --waiting-excluded-endpoints to customize the exempt paths."""
+    waiting_excluded_endpoints: str | None = None
+    """Comma-separated list of endpoint paths exempt from --max-waiting-seqs.
+    When unset, a built-in default of health and monitoring endpoints is used
+    (/health, /load, /ping, /version, /server_info, /metrics). Setting this
+    replaces the default list entirely. Example: "/health,/ping"."""
     disable_uvicorn_access_log: bool = False
     """Disable uvicorn access log."""
     disable_access_log_for_endpoints: str | None = None
@@ -333,6 +343,11 @@ class FrontendArgs(BaseFrontendArgs):
         if "nargs" in frontend_kwargs["disable_access_log_for_endpoints"]:
             del frontend_kwargs["disable_access_log_for_endpoints"]["nargs"]
 
+        # Special case: waiting_excluded_endpoints is a single comma-separated
+        # string, not a list.
+        if "nargs" in frontend_kwargs["waiting_excluded_endpoints"]:
+            del frontend_kwargs["waiting_excluded_endpoints"]["nargs"]
+
         return frontend_kwargs
 
 
@@ -396,6 +411,9 @@ def validate_parsed_serve_args(args: argparse.Namespace):
         raise TypeError("Error: --enable-auto-tool-choice requires --tool-call-parser")
     if args.enable_log_outputs and not args.enable_log_requests:
         raise TypeError("Error: --enable-log-outputs requires --enable-log-requests")
+    max_waiting_seqs = getattr(args, "max_waiting_seqs", None)
+    if max_waiting_seqs is not None and max_waiting_seqs < 0:
+        raise ValueError("Error: --max-waiting-seqs must be greater than or equal to 0")
 
     if getattr(args, "enable_per_request_metrics", False) and getattr(
         args, "disable_log_stats", False

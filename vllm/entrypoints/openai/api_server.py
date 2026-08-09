@@ -42,6 +42,7 @@ from vllm.entrypoints.serve.utils.api_utils import (
 )
 from vllm.entrypoints.serve.utils.request_logger import RequestLogger
 from vllm.entrypoints.serve.utils.server_utils import (
+    WaitingSeqsLimitMiddleware,
     engine_error_handler,
     exception_handler,
     generation_error_handler,
@@ -158,6 +159,7 @@ def build_app(
     args: Namespace,
     supported_tasks: tuple["SupportedTask", ...] | None = None,
     model_config: ModelConfig | None = None,
+    max_num_seqs: int | None = None,
 ) -> FastAPI:
     if supported_tasks is None:
         warnings.warn(
@@ -178,6 +180,23 @@ def build_app(
     else:
         app = FastAPI(lifespan=lifespan)
     app.state.args = args
+
+    # Add this before Prometheus instrumentation so the instrumentation
+    # middleware wraps waiting-limit rejections and records their 429 status.
+    if args.max_waiting_seqs is not None:
+        if max_num_seqs is None:
+            raise ValueError("max_num_seqs is required when --max-waiting-seqs is set")
+        waiting_limit_kwargs: dict = {
+            "max_num_seqs": max_num_seqs,
+            "max_waiting_seqs": args.max_waiting_seqs,
+        }
+        if args.waiting_excluded_endpoints is not None:
+            waiting_limit_kwargs["excluded_paths"] = tuple(
+                p.strip()
+                for p in args.waiting_excluded_endpoints.split(",")
+                if p.strip()
+            )
+        app.add_middleware(WaitingSeqsLimitMiddleware, **waiting_limit_kwargs)
 
     from vllm.entrypoints.serve import register_vllm_serve_api_routers
 
@@ -610,7 +629,8 @@ async def build_and_serve(
     model_config = engine_client.model_config
 
     logger.info("Supported tasks: %s", supported_tasks)
-    app = build_app(args, supported_tasks, model_config)
+    max_num_seqs = engine_client.vllm_config.scheduler_config.max_num_seqs
+    app = build_app(args, supported_tasks, model_config, max_num_seqs)
     await init_app_state(engine_client, app.state, args, supported_tasks)
 
     logger.info("Starting vLLM server on %s", listen_address)
@@ -655,7 +675,8 @@ async def build_and_serve_renderer(
     if log_config is not None:
         uvicorn_kwargs["log_config"] = log_config
 
-    app = build_app(args, ("render",))
+    max_num_seqs = vllm_config.scheduler_config.max_num_seqs
+    app = build_app(args, ("render",), max_num_seqs=max_num_seqs)
     await init_render_app_state(vllm_config, app.state, args)
 
     logger.info("Starting vLLM server on %s", listen_address)

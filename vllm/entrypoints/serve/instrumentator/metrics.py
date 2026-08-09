@@ -63,6 +63,7 @@ def attach_router(app: FastAPI):
     # instead of the default "application/json" which is incorrect.
     # See https://github.com/trallnag/prometheus-fastapi-instrumentator/issues/163#issue-1296092364
     Instrumentator(
+        should_group_status_codes=False,
         excluded_handlers=[
             "/metrics",
             "/health",

@@ -1,0 +1,50 @@
+ARG BASE_IMAGE_TAG=latest
+ARG BASE_IMAGE=vllm/vllm-openai:${BASE_IMAGE_TAG}
+FROM ${BASE_IMAGE}
+
+# Generic patch image for Python-only vLLM changes.
+#
+# Build from the repository root:
+#   docker build \
+#     -f Dockerfile.python-patch \
+#     --build-arg BASE_IMAGE=vllm/vllm-openai:<base-tag> \
+#     -t vllm-openai:python-patch \
+#     .
+#
+# This copies only Python files from the local vllm/ tree into the installed
+# vLLM package inside BASE_IMAGE. It intentionally does not rebuild CUDA/C++
+# extensions, so use it only when your changes are Python-only and compatible
+# with the selected BASE_IMAGE version.
+COPY vllm /tmp/vllm-python-patch/vllm
+
+RUN python3 - <<'PY'
+from pathlib import Path
+import compileall
+import shutil
+
+import vllm
+
+package_root = Path(vllm.__file__).resolve().parent
+source_root = Path("/tmp/vllm-python-patch/vllm")
+
+if not source_root.is_dir():
+    raise RuntimeError(f"Patch source directory does not exist: {source_root}")
+
+patched_files = []
+for source_file in sorted(source_root.rglob("*.py")):
+    relative_path = source_file.relative_to(source_root)
+    target_file = package_root / relative_path
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_file, target_file)
+    patched_files.append(target_file)
+
+if not patched_files:
+    raise RuntimeError(f"No Python files found under {source_root}")
+
+compileall.compile_dir(str(package_root), quiet=1)
+print(f"Patched {len(patched_files)} Python files under {package_root}")
+PY
+
+RUN rm -rf /tmp/vllm-python-patch
+
+ENTRYPOINT ["vllm", "serve"]

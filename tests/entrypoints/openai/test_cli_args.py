@@ -4,9 +4,16 @@
 import json
 
 import pytest
+from prometheus_client import CollectorRegistry
+from prometheus_fastapi_instrumentator.middleware import (
+    PrometheusInstrumentatorMiddleware,
+)
 
+from vllm.entrypoints.openai.api_server import build_app
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.openai.models.protocol import LoRAModulePath
+from vllm.entrypoints.serve.instrumentator import metrics as metrics_module
+from vllm.entrypoints.serve.utils.server_utils import WaitingSeqsLimitMiddleware
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from ...utils import VLLM_PATH
@@ -62,6 +69,53 @@ def test_config_arg_parsing(serve_parser, cli_config_file):
         ]
     )
     assert args.port == 9000
+
+
+def test_max_waiting_seqs_arg_parsing(serve_parser):
+    args = serve_parser.parse_args([])
+    assert args.max_waiting_seqs is None
+
+    args = serve_parser.parse_args(["--max-waiting-seqs", "128"])
+    assert args.max_waiting_seqs == 128
+    validate_parsed_serve_args(args)
+
+    args = serve_parser.parse_args(["--max-waiting-seqs", "0"])
+    assert args.max_waiting_seqs == 0
+    validate_parsed_serve_args(args)
+
+    args = serve_parser.parse_args(["--max-waiting-seqs", "-1"])
+    with pytest.raises(ValueError, match="--max-waiting-seqs"):
+        validate_parsed_serve_args(args)
+
+
+def test_waiting_excluded_endpoints_arg_parsing(serve_parser):
+    args = serve_parser.parse_args([])
+    assert args.waiting_excluded_endpoints is None
+
+    args = serve_parser.parse_args(["--waiting-excluded-endpoints", "/health,/ping"])
+    assert args.waiting_excluded_endpoints == "/health,/ping"
+    validate_parsed_serve_args(args)
+
+
+def test_waiting_limit_is_inside_prometheus_instrumentation(serve_parser, monkeypatch):
+    monkeypatch.setattr(metrics_module, "get_prometheus_registry", CollectorRegistry)
+    args = serve_parser.parse_args(["--max-waiting-seqs", "0"])
+
+    app = build_app(args, (), max_num_seqs=1)
+    middleware_classes = [middleware.cls for middleware in app.user_middleware]
+
+    assert middleware_classes.index(
+        PrometheusInstrumentatorMiddleware
+    ) < middleware_classes.index(WaitingSeqsLimitMiddleware)
+
+
+@pytest.mark.parametrize(
+    "old_arg",
+    ["--limit-concurrency", "--limit-concurrency-excluded-endpoints"],
+)
+def test_old_concurrency_limit_args_are_rejected(serve_parser, old_arg):
+    with pytest.raises(SystemExit):
+        serve_parser.parse_args([old_arg, "1"])
 
 
 ### Tests for LoRA module parsing
